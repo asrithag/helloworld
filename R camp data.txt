@@ -1,0 +1,136 @@
+---
+output:
+  pdf_document
+  
+---
+install.packages("readr")
+install.packages("ggplot2")
+install.packages("data.table")
+install.packages("magrittr")
+install.packages("dplyr")
+install.packages("tm")
+install.packages("wordcloud")
+
+library(ggplot2)
+library(magrittr)
+library(readr)
+library(dplyr)
+library(tm)
+library(data.table)
+#library(wordcloud)
+#ibrary(sos)
+#indFn("select")
+
+# READ DATA FILE
+cc_data_raw <- read_csv("C:/Users/asrit/Documents/R/email_campaigns_report.csv")
+names(cc_data_raw) <- make.names(names(cc_data_raw))
+View(cc_data_raw)
+
+# SET PROPER DATA TYPES and COLUMN NAMES
+cc_data_raw$Time.Sent <-  as.POSIXct(cc_data_raw$Time.Sent, 
+                                     format="%a, %b %d, %Y %H:%M %p")
+cc_data_raw$Open.Rate <- as.numeric(gsub('%','',cc_data_raw$Open.Rate))
+cc_data_raw$Mobile.Open.Rate <- as.numeric(gsub('%','',
+                                                cc_data_raw$Mobile.Open.Rate))
+cc_data_raw$Desktop.Open.Rate <- as.numeric(gsub('%','',
+                                                 cc_data_raw$Desktop.Open.Rate))
+cc_data_raw$Click.Through.Rate <- as.numeric(gsub('%','',
+                                                  cc_data_raw$Click.Through.Rate))
+cc_data_raw$Bounce.Rate <- as.numeric(gsub('%','',cc_data_raw$Bounce.Rate))
+cc_data_raw$Unsubscribe.Rate <- as.numeric(gsub('%','',cc_data_raw$Unsubscribe.Rate))
+
+sel_cols = c("Time.Sent", "Campaign.Name","Open.Rate", "Total.Sent", 
+             "Mobile.Open.Rate","Desktop.Open.Rate",
+             "Click.Through.Rate","Bounce.Rate","Unsubscribe.Rate",
+             "Sent.to.Contact.Lists")
+
+# CLEAN UP RECORDS
+# remove test emails before 3/28/16 and if sent to less than 10 people
+# remove campaigns not sent to email lists.
+clean_records <- cc_data_raw %>%
+  select(sel_cols) %>%
+  filter(Total.Sent > 10) %>%
+  filter(Time.Sent > '2016-03-28') %>%
+  filter(nchar(Sent.to.Contact.Lists)> 1) 
+# %>%
+# group_by(Campaign.Name)
+
+## MAKE SEPARATE COLUMN FOR EACH EMAIL LIST
+lists <- sapply(clean_records$Sent.to.Contact.Lists, 
+                function(x){y=unlist(strsplit(x,","));return(y)})
+names(lists) <- NULL
+lists <- unlist(lists)
+lists <- trimws(lists)
+lists <- unique(lists)
+for (li in 1:length(lists)) {
+  l <- lists[li]
+  colname <- make.names(l)
+  vals <- list()
+  for (i in 1:nrow(clean_records) ){
+    r <- as.character(clean_records[i,10])
+    elist <- trimws(unlist(strsplit(r,",")))
+    vals <- c(vals, l %in% elist)
+  }
+  newcol <- do.call(rbind, vals)
+  clean_records$xx <- newcol
+  setnames(clean_records, "xx", colname)
+}
+
+
+
+
+### ANALYZE EMAIL LISTS USED
+EmailListUseCount <- sapply(clean_records[,11:53], colSums)
+useCounts <- data.frame(UseCount = unlist(EmailListUseCount), 
+                        EmailList = names(EmailListUseCount))
+rownames(useCounts) <- NULL
+
+qplot(x=reorder(EmailList, -UseCount), y=UseCount, data=useCounts,
+      ylab="No. of Times used in Campaigns",xlab="Email List Name") + 
+    theme(axis.text.x=element_text(angle=90,hjust=1))
+
+EmailListUsePct <- sapply(clean_records[,11:53], colMeans)
+usePcts <- data.frame(UsePct = unlist(EmailListUsePct), 
+                      EmailList = names(EmailListUsePct))
+rownames(usePcts) <- NULL
+
+qplot(x=reorder(EmailList, -UsePct), y=UsePct*100, data=usePcts,
+      ylab="Percent of Times used in Campaigns",xlab="Email List Name") + 
+  theme(axis.text.x=element_text(angle=90,hjust=1))
+
+wordcloud(useCounts$EmailList, useCounts$UseCount, colors = c(1:6),
+          scale=c(1,.5))
+
+
+# ANALYZE CAMPAIGN SUBJECT 
+vs <- VectorSource(clean_records$Campaign.Name)
+vc <- VCorpus(vs)
+tdm <- TermDocumentMatrix(vc, control = list(removeNumbers = TRUE,
+                                              stopwords = TRUE,
+                                             stripWhitespace = TRUE,
+                                             stemming = FALSE
+                                             ))
+
+library(wordcloud)
+subj_words <- as.matrix(tdm)
+wordcloud(rownames(subj_words), rowSums(subj_words),  
+          random.order = TRUE, random.color = TRUE)
+
+
+
+# WORD CLOUD BASED ON TERMS IN CAMPAIGN NAME
+strsplit_space_tokenizer <- function(x)
+  unlist(strsplit(as.character(x), "[[:space:]_]+"))
+ctrl <- list(tokenize = strsplit_space_tokenizer,
+             removePunctuation = list(preserve_intra_word_dashes = TRUE),
+             stopwords = c("English"),
+             stemming = FALSE, removeNumbers = TRUE,
+             wordLengths = c(4, 10))
+tf <- termFreq(clean_records$Campaign.Name, control = ctrl)
+tf["email"] <- 1
+tf["blast"] <- 1
+
+common_terms <- tf[tf > 5]
+wordcloud(names(common_terms), common_terms,  
+          random.order = TRUE, random.color = TRUE)
+text(x=0.5, y=0.9, "MOST USED WORDS IN THE SUBJECT", cex=2)
